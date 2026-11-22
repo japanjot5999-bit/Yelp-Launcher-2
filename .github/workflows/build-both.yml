@@ -8,6 +8,8 @@ on:
       - 'Yelp_Launcher/web-preview/**'
       - 'Yelp_Java_Engine_Build_Kit/scripts/**'
       - 'Yelp_Java_Engine_Build_Kit/docs/**'
+      - 'Yelp_Launcher_Source.zip'
+      - 'Yelp_Java_Engine_Build_Kit.zip'
       - '.github/workflows/build-both.yml'
 
 permissions:
@@ -20,6 +22,14 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+
+      - name: Extract Yelp Launcher source ZIP
+        run: |
+          test -s Yelp_Launcher_Source.zip
+          unzip -q -o Yelp_Launcher_Source.zip -d "$GITHUB_WORKSPACE"
+          test -f Yelp_Launcher/android/settings.gradle.kts
+          test -f Yelp_Launcher/android/app/build.gradle.kts
+          test -f Yelp_Launcher/web-preview/app.js
 
       - name: Set up Java 17
         uses: actions/setup-java@v4
@@ -74,6 +84,13 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+
+      - name: Extract Java Engine build kit ZIP
+        run: |
+          test -s Yelp_Java_Engine_Build_Kit.zip
+          unzip -q -o Yelp_Java_Engine_Build_Kit.zip -d "$GITHUB_WORKSPACE"
+          test -f Yelp_Java_Engine_Build_Kit/scripts/fetch-amethyst.sh
+          test -f Yelp_Java_Engine_Build_Kit/docs/ENGINE_INTEGRATION.md
 
       - name: Check out Amethyst engine and submodules
         run: |
