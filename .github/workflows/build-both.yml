@@ -349,3 +349,15 @@ jobs:
           find amethyst-engine -type f \
             \( -iname 'LICENSE' -o -iname 'LICENSE.*' -o -iname 'NOTICE' -o -iname 'NOTICE.*' -o -iname 'COPYING' -o -iname 'COPYING.*' \) \
             -not -path '*/.git/*' -print0 | while IFS= read -r -d '' license_file; do
+            
+            cp "$license_file" "integrated-output/third-party-licenses/$(printf '%s' "$license_file" | tr '/' '_')"
+          done
+
+      - name: Upload the single integrated APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Yelp-Launcher-Integrated-debug-apk
+          path: integrated-output/
+          if-no-files-found: error
+          retention-days: 14
+          
