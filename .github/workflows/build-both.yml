@@ -110,7 +110,10 @@ jobs:
         uses: android-actions/setup-android@v4
 
       - name: Install engine SDK and NDK
-        run: sdkmanager 'platforms;android-37' 'build-tools;37.0.0' 'ndk;27.3.13750724'
+        run: |
+          sdkmanager "platforms;android-37.0" "build-tools;37.0.0" "ndk;27.3.13750724"
+          test -d "$ANDROID_HOME/platforms/android-37.0"
+          ln -s android-37.0 "$ANDROID_HOME/platforms/android-37"
 
       - name: Prepare engine runtime folder
         run: mkdir -p amethyst-engine/app_pojavlauncher/src/main/assets/components/jre
