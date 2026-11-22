@@ -1,13 +1,9 @@
-name: Build Yelp Launcher and Java Engine APKs
+name: Build One Yelp Launcher APK (Integrated Amethyst Engine)
 
 on:
   workflow_dispatch:
   push:
     paths:
-      - 'Yelp_Launcher/android/**'
-      - 'Yelp_Launcher/web-preview/**'
-      - 'Yelp_Java_Engine_Build_Kit/scripts/**'
-      - 'Yelp_Java_Engine_Build_Kit/docs/**'
       - 'Yelp_Launcher_Source.zip'
       - 'Yelp_Java_Engine_Build_Kit.zip'
       - '.github/workflows/build-both.yml'
@@ -16,83 +12,24 @@ permissions:
   contents: read
 
 jobs:
-  build-yelp-launcher:
-    name: Build Yelp Launcher APK
-    runs-on: ubuntu-latest
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
-
-      - name: Extract Yelp Launcher source ZIP
-        run: |
-          test -s Yelp_Launcher_Source.zip
-          unzip -q -o Yelp_Launcher_Source.zip -d "$GITHUB_WORKSPACE"
-          test -f Yelp_Launcher/android/settings.gradle.kts
-          test -f Yelp_Launcher/android/app/build.gradle.kts
-          test -f Yelp_Launcher/web-preview/app.js
-
-      - name: Set up Java 17
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '17'
-
-      - name: Verify launcher JavaScript and Android asset copies
-        working-directory: Yelp_Launcher
-        run: |
-          node --check web-preview/app.js
-          cmp web-preview/index.html android/app/src/main/assets/index.html
-          cmp web-preview/app.js android/app/src/main/assets/app.js
-          cmp web-preview/styles.css android/app/src/main/assets/styles.css
-
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v4
-
-      - name: Install Android SDK packages
-        run: sdkmanager 'platforms;android-36' 'build-tools;36.0.0'
-
-      - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: '9.6.0'
-
-      - name: Build Yelp Launcher debug APK
-        working-directory: Yelp_Launcher/android
-        run: gradle --no-daemon assembleDebug
-
-      - name: Verify and checksum Yelp Launcher APK
-        working-directory: Yelp_Launcher
-        run: |
-          APK="android/app/build/outputs/apk/debug/app-debug.apk"
-          test -s "$APK"
-          mkdir -p build-output
-          cp "$APK" build-output/Yelp-Launcher-debug.apk
-          sha256sum build-output/Yelp-Launcher-debug.apk > build-output/SHA256SUMS
-          ls -lh build-output/Yelp-Launcher-debug.apk
-
-      - name: Upload Yelp Launcher APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: Yelp-Launcher-debug-apk
-          path: Yelp_Launcher/build-output/
-          if-no-files-found: error
-          retention-days: 14
-
-  build-java-engine:
-    name: Build Amethyst Java Edition Engine APK
+  build-integrated-yelp:
+    name: Build one integrated Yelp Launcher APK
     runs-on: ubuntu-22.04
     steps:
-      - name: Check out repository
+      - name: Check out Yelp repository
         uses: actions/checkout@v4
 
-      - name: Extract Java Engine build kit ZIP
+      - name: Verify and extract the two source packages
         run: |
+          test -s Yelp_Launcher_Source.zip
           test -s Yelp_Java_Engine_Build_Kit.zip
+          unzip -q -o Yelp_Launcher_Source.zip -d "$GITHUB_WORKSPACE"
           unzip -q -o Yelp_Java_Engine_Build_Kit.zip -d "$GITHUB_WORKSPACE"
-          test -f Yelp_Java_Engine_Build_Kit/scripts/fetch-amethyst.sh
+          test -f Yelp_Launcher/android/app/src/main/assets/index.html
+          test -f Yelp_Launcher/android/app/src/main/assets/app.js
           test -f Yelp_Java_Engine_Build_Kit/docs/ENGINE_INTEGRATION.md
 
-      - name: Check out Amethyst engine and submodules
+      - name: Check out Amethyst engine and native submodules
         run: |
           git clone --depth 1 --branch v3_openjdk --recurse-submodules \
             https://github.com/AngelAuraMC/Amethyst-Android.git amethyst-engine
@@ -109,11 +46,14 @@ jobs:
       - name: Set up Android SDK
         uses: android-actions/setup-android@v4
 
-      - name: Install engine SDK and NDK
+      - name: Install Android 37 SDK and NDK
         run: |
+          yes | sdkmanager --licenses >/dev/null
           sdkmanager "platforms;android-37.0" "build-tools;37.0.0" "ndk;27.3.13750724"
-          test -d "$ANDROID_HOME/platforms/android-37.0"
-          ln -s android-37.0 "$ANDROID_HOME/platforms/android-37"
+          test -f "$ANDROID_HOME/platforms/android-37.0/android.jar"
+          # Amethyst currently declares compileSdk = 37; API 37 is installed as android-37.0.
+          ln -sfn android-37.0 "$ANDROID_HOME/platforms/android-37"
+          test -f "$ANDROID_HOME/platforms/android-37/android.jar"
 
       - name: Prepare engine runtime folder
         run: mkdir -p amethyst-engine/app_pojavlauncher/src/main/assets/components/jre
@@ -128,44 +68,284 @@ jobs:
           branch: buildjre8
           name: jre8-pojav
 
+      - name: Integrate Yelp home screen into the Amethyst application
+        run: |
+          python3 - <<'PY'
+          #!/usr/bin/env python3
+          """Integrate the Yelp Launcher UI into the Amethyst Android application."""
+          from pathlib import Path
+          import re
+          import shutil
+          import xml.etree.ElementTree as ET
+          
+          ROOT = Path.cwd()
+          YELP = ROOT / "Yelp_Launcher"
+          ENGINE = ROOT / "amethyst-engine"
+          APP = ENGINE / "app_pojavlauncher"
+          MAIN = APP / "src/main"
+          
+          required = [
+              YELP / "android/app/src/main/assets/index.html",
+              YELP / "android/app/src/main/assets/app.js",
+              YELP / "android/app/src/main/java/com/yelp/launcher/MainActivity.java",
+              YELP / "android/app/src/main/java/com/yelp/launcher/ScreenRecordService.java",
+              ENGINE / "app_pojavlauncher/src/main/AndroidManifest.xml",
+              ENGINE / "app_pojavlauncher/build.gradle",
+          ]
+          missing = [str(p) for p in required if not p.is_file()]
+          if missing:
+              raise SystemExit("Required Yelp/Amethyst source files are missing:\n" + "\n".join(missing))
+          
+          # Copy the existing, checked Yelp WebView assets into Amethyst's APK assets.
+          shutil.copytree(YELP / "android/app/src/main/assets", MAIN / "assets", dirs_exist_ok=True)
+          
+          # Add Yelp's native Android Activities and Replay Studio capture service.
+          java_dir = MAIN / "java/com/yelp/launcher"
+          java_dir.mkdir(parents=True, exist_ok=True)
+          main_activity = (YELP / "android/app/src/main/java/com/yelp/launcher/MainActivity.java").read_text(encoding="utf-8")
+          
+          # Replace separate-app detection with a same-APK handoff to Amethyst's normal setup flow.
+          main_activity, status_count = re.subn(
+              r"        @JavascriptInterface public String javaEngineStatus\(\) \{.*?\n        \}",
+              '''        @JavascriptInterface public String javaEngineStatus() {
+                      return "integrated";
+                  }''',
+              main_activity,
+              count=1,
+              flags=re.S,
+          )
+          main_activity, open_count = re.subn(
+              r"        @JavascriptInterface public void openJavaEngine\(String requestedVersion\) \{.*?\n        \}",
+              '''        @JavascriptInterface public void openJavaEngine(String requestedVersion) {
+                      runOnUiThread(() -> {
+                          try {
+                              Toast.makeText(MainActivity.this,
+                                      "Opening the built-in Java engine. Sign in, install or select a Minecraft version there, then tap Play.",
+                                      Toast.LENGTH_LONG).show();
+                              // Use Amethyst's own first-run storage/runtime setup, then its native launcher.
+                              startActivity(new Intent(MainActivity.this, net.kdt.pojavlaunch.TestStorageActivity.class));
+                          } catch (ActivityNotFoundException e) {
+                              Toast.makeText(MainActivity.this,
+                                      "The integrated Java engine could not be opened.", Toast.LENGTH_LONG).show();
+                          }
+                      });
+                  }''',
+              main_activity,
+              count=1,
+              flags=re.S,
+          )
+          if status_count != 1 or open_count != 1:
+              raise SystemExit(f"Could not safely patch Yelp engine bridge (status={status_count}, open={open_count}).")
+          (java_dir / "MainActivity.java").write_text(main_activity, encoding="utf-8")
+          shutil.copy2(
+              YELP / "android/app/src/main/java/com/yelp/launcher/ScreenRecordService.java",
+              java_dir / "ScreenRecordService.java",
+          )
+          
+          # Update the UI bridge state: the engine is part of this APK, not a companion install.
+          app_js = MAIN / "assets/app.js"
+          js = app_js.read_text(encoding="utf-8")
+          changes = [
+              ("const installed=state==='installed-debug'||state==='installed-release';",
+               "const integrated=state==='integrated';\n const installed=integrated||state==='installed-debug'||state==='installed-release';"),
+              ("label.textContent=installed?'Amethyst Java engine companion installed':state==='browser-preview'?'Install the Android app to connect the Java engine':'Java engine companion not installed';",
+               "label.textContent=integrated?'Java Edition engine integrated':state==='browser-preview'?'Install the Android app to connect the Java engine':'Java engine not available';"),
+              ("buttonLabel.textContent=installed?'OPEN JAVA ENGINE':'INSTALL JAVA ENGINE';",
+               "buttonLabel.textContent=integrated?'PLAY MINECRAFT':installed?'OPEN JAVA ENGINE':'INSTALL JAVA ENGINE';"),
+          ]
+          for old, new in changes:
+              if old not in js:
+                  raise SystemExit("Expected Yelp app.js engine-status text was not found; refusing a partial patch: " + old)
+              js = js.replace(old, new, 1)
+          app_js.write_text(js, encoding="utf-8")
+          
+          # Use the former Yelp debug package ID so this integrated APK updates the existing Yelp app.
+          # Update Amethyst's generated provider/package strings at the same time.
+          gradle_file = APP / "build.gradle"
+          gradle = gradle_file.read_text(encoding="utf-8")
+          if 'applicationId "org.angelauramc.amethyst"' not in gradle:
+              raise SystemExit("Unexpected Amethyst applicationId; refusing to guess a package patch.")
+          gradle = gradle.replace('applicationId "org.angelauramc.amethyst"', 'applicationId "com.yelp.launcher"', 1)
+          gradle = gradle.replace("org.angelauramc.amethyst", "com.yelp.launcher")
+          for key in ("app_name", "app_short_name"):
+              pattern = rf'(resValue\s+"string",\s+"{key}",\s*)"[^"]+"'
+              gradle, count = re.subn(pattern, r'\1"Yelp Launcher"', gradle)
+              if count != 2:
+                  raise SystemExit(f"Expected 2 generated {key} strings, found {count}.")
+          gradle_file.write_text(gradle, encoding="utf-8")
+          
+          # Replace any remaining literal application-ID references in text source/resources.
+          for path in ENGINE.rglob("*"):
+              if not path.is_file() or path == gradle_file or ".git" in path.parts or ".gradle" in path.parts:
+                  continue
+              try:
+                  text = path.read_text(encoding="utf-8")
+              except (UnicodeDecodeError, OSError):
+                  continue
+              if "org.angelauramc.amethyst" in text:
+                  path.write_text(text.replace("org.angelauramc.amethyst", "com.yelp.launcher"), encoding="utf-8")
+          
+          # Merge the WebView Activity + replay recording service into Amethyst's manifest.
+          manifest_path = MAIN / "AndroidManifest.xml"
+          ET.register_namespace("android", "http://schemas.android.com/apk/res/android")
+          ET.register_namespace("tools", "http://schemas.android.com/tools")
+          ANDROID = "{http://schemas.android.com/apk/res/android}"
+          root = ET.parse(manifest_path).getroot()
+          application = root.find("application")
+          if application is None:
+              raise SystemExit("Amethyst AndroidManifest.xml has no application element.")
+          application.set(ANDROID + "label", "@string/app_name")
+          application.set(ANDROID + "icon", "@drawable/yelp_launcher_icon")
+          application.set(ANDROID + "roundIcon", "@drawable/yelp_launcher_icon")
+          
+          # A simple native vector app icon that matches the Yelp launcher brand mark.
+          icon_dir = MAIN / "res/drawable"
+          icon_dir.mkdir(parents=True, exist_ok=True)
+          (icon_dir / "yelp_launcher_icon.xml").write_text('''<?xml version="1.0" encoding="utf-8"?>
+          <vector xmlns:android="http://schemas.android.com/apk/res/android"
+              android:width="128dp" android:height="128dp"
+              android:viewportWidth="128" android:viewportHeight="128">
+              <path android:fillColor="#101D29" android:pathData="M4,4h120v120h-120z" />
+              <path android:fillColor="#80E5C9" android:pathData="M34,20h60v21H55v20h35v21H55v26H34z" />
+              <path android:fillColor="#6A9FFF" android:pathData="M73,61h21v47H73z" />
+          </vector>
+          ''', encoding="utf-8")
+          
+          # TestStorageActivity must remain available internally, but no longer owns the app icon.
+          for activity in application.findall("activity"):
+              if activity.get(ANDROID + "name") == ".TestStorageActivity":
+                  for intent_filter in list(activity.findall("intent-filter")):
+                      actions = {node.get(ANDROID + "name") for node in intent_filter.findall("action")}
+                      categories = {node.get(ANDROID + "name") for node in intent_filter.findall("category")}
+                      if "android.intent.action.MAIN" in actions and "android.intent.category.LAUNCHER" in categories:
+                          activity.remove(intent_filter)
+                  activity.set(ANDROID + "exported", "false")
+                  break
+          else:
+              raise SystemExit("Could not find Amethyst TestStorageActivity in manifest.")
+          
+          # Add required MediaProjection foreground-service permission if absent.
+          permission_name = "android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION"
+          if not any(el.tag == "uses-permission" and el.get(ANDROID + "name") == permission_name for el in root):
+              permission = ET.Element("uses-permission")
+              permission.set(ANDROID + "name", permission_name)
+              # Keep permissions before the application node.
+              app_index = list(root).index(application)
+              root.insert(app_index, permission)
+          
+          # Yelp becomes the sole MAIN/LAUNCHER Activity in the combined app.
+          existing_yelp_activity = next(
+              (el for el in application.findall("activity") if el.get(ANDROID + "name") == "com.yelp.launcher.MainActivity"),
+              None,
+          )
+          if existing_yelp_activity is not None:
+              application.remove(existing_yelp_activity)
+          yelp_activity = ET.SubElement(application, "activity", {
+              ANDROID + "name": "com.yelp.launcher.MainActivity",
+              ANDROID + "configChanges": "keyboard|keyboardHidden|orientation|screenSize",
+              ANDROID + "exported": "true",
+              ANDROID + "screenOrientation": "unspecified",
+              ANDROID + "label": "@string/app_name",
+          })
+          filter_el = ET.SubElement(yelp_activity, "intent-filter")
+          ET.SubElement(filter_el, "action", {ANDROID + "name": "android.intent.action.MAIN"})
+          ET.SubElement(filter_el, "category", {ANDROID + "name": "android.intent.category.LAUNCHER"})
+          
+          # Declare Yelp Replay Studio's user-consented display-capture service.
+          if not any(el.tag == "service" and el.get(ANDROID + "name") == "com.yelp.launcher.ScreenRecordService" for el in application.findall("service")):
+              ET.SubElement(application, "service", {
+                  ANDROID + "name": "com.yelp.launcher.ScreenRecordService",
+                  ANDROID + "exported": "false",
+                  ANDROID + "foregroundServiceType": "mediaProjection",
+              })
+          
+          ET.indent(root, space="    ")
+          ET.ElementTree(root).write(manifest_path, encoding="utf-8", xml_declaration=True)
+          
+          # Guardrails: one and only one launcher Activity, with the integrated engine entry preserved.
+          check_root = ET.parse(manifest_path).getroot()
+          check_app = check_root.find("application")
+          launcher_activities = []
+          for activity in check_app.findall("activity"):
+              for intent_filter in activity.findall("intent-filter"):
+                  actions = {node.get(ANDROID + "name") for node in intent_filter.findall("action")}
+                  categories = {node.get(ANDROID + "name") for node in intent_filter.findall("category")}
+                  if "android.intent.action.MAIN" in actions and "android.intent.category.LAUNCHER" in categories:
+                      launcher_activities.append(activity.get(ANDROID + "name"))
+          if launcher_activities != ["com.yelp.launcher.MainActivity"]:
+              raise SystemExit("Expected only Yelp MainActivity to be the app launcher; found: " + repr(launcher_activities))
+          if not (java_dir / "MainActivity.java").is_file() or not (java_dir / "ScreenRecordService.java").is_file():
+              raise SystemExit("Yelp Android components were not copied correctly.")
+          if 'return "integrated";' not in (java_dir / "MainActivity.java").read_text(encoding="utf-8"):
+              raise SystemExit("The Yelp Java bridge is not configured for the integrated engine.")
+          
+          print("Integrated Yelp Launcher UI + Amethyst engine into one Android application.")
+          print("Single app ID: com.yelp.launcher.debug (debug build)")
+          print("Launcher Activity: com.yelp.launcher.MainActivity")
+          print("Java engine handoff: net.kdt.pojavlaunch.TestStorageActivity")
+          print("Replay Studio service: com.yelp.launcher.ScreenRecordService")
+          PY
+
+      - name: Verify the integrated source and single launcher entry
+        run: |
+          node --check amethyst-engine/app_pojavlauncher/src/main/assets/app.js
+          python3 - <<'PY'
+          from pathlib import Path
+          import xml.etree.ElementTree as ET
+          manifest = Path("amethyst-engine/app_pojavlauncher/src/main/AndroidManifest.xml")
+          root = ET.parse(manifest).getroot()
+          android = "{http://schemas.android.com/apk/res/android}"
+          launchers = []
+          for activity in root.find("application").findall("activity"):
+              for filt in activity.findall("intent-filter"):
+                  actions = {node.get(android + "name") for node in filt.findall("action")}
+                  categories = {node.get(android + "name") for node in filt.findall("category")}
+                  if "android.intent.action.MAIN" in actions and "android.intent.category.LAUNCHER" in categories:
+                      launchers.append(activity.get(android + "name"))
+          assert launchers == ["com.yelp.launcher.MainActivity"], launchers
+          assert Path("amethyst-engine/app_pojavlauncher/src/main/java/com/yelp/launcher/ScreenRecordService.java").is_file()
+          print("One launcher Activity verified:", launchers[0])
+          PY
+
+      - name: Prepare Amethyst build scripts and language resources
+        working-directory: amethyst-engine
+        run: |
+          chmod +x gradlew scripts/languagelist_updater.sh
+          ./scripts/languagelist_updater.sh
+
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '9.6.1'
           validate-wrappers: false
 
-      - name: Build Amethyst engine APK
+      - name: Build Amethyst native runtime components
         working-directory: amethyst-engine
-        run: |
-          chmod +x gradlew scripts/languagelist_updater.sh
-          ./scripts/languagelist_updater.sh
-          ./gradlew --no-daemon :jre_lwjgl3glfw:build
-          ./gradlew --no-daemon :app_pojavlauncher:assembleDebug
+        run: ./gradlew --no-daemon :jre_lwjgl3glfw:build
 
-      - name: Verify engine APK and package provenance
+      - name: Build the single integrated Yelp Launcher APK
+        working-directory: amethyst-engine
+        run: ./gradlew --no-daemon :app_pojavlauncher:assembleDebug
+
+      - name: Verify and package the one integrated APK
         run: |
           APK="amethyst-engine/app_pojavlauncher/build/outputs/apk/debug/app_pojavlauncher-debug.apk"
           test -s "$APK"
-          mkdir -p engine-output/third-party-licenses
-          cp "$APK" engine-output/Yelp-Java-Engine-Amethyst-debug.apk
-          cp amethyst-source-commit.txt engine-output/
-          cp amethyst-engine/LICENSE engine-output/AMETHYST-LICENSE
-          cp amethyst-engine/README.md engine-output/AMETHYST-UPSTREAM-README.md
+          mkdir -p integrated-output/third-party-licenses
+          cp "$APK" integrated-output/Yelp-Launcher-Integrated-debug.apk
+          cp amethyst-source-commit.txt integrated-output/AMETHYST-SOURCE-COMMIT.txt
+          cp amethyst-engine/LICENSE integrated-output/AMETHYST-LICENSE
+          cp amethyst-engine/README.md integrated-output/AMETHYST-UPSTREAM-README.md
+          cp Yelp_Launcher/THIRD_PARTY_NOTICES.md integrated-output/YELP-THIRD-PARTY-NOTICES.md
+          cat > integrated-output/INTEGRATION-INFO.txt <<'EOF'
+          YELP LAUNCHER 鈥� SINGLE-APP INTEGRATED BUILD
+
+          This APK contains the Yelp Launcher home screen and the Amethyst Java Edition engine in one Android application.
+          The Yelp Play button opens Amethyst's built-in setup and launcher Activity inside this same app.
+          Microsoft sign-in, Minecraft ownership checks, version installation, Java runtime management and game launch are handled by Amethyst.
+          A version selected in the Yelp UI is not automatically imported into Amethyst yet; select/install the version in the integrated engine screen.
+          This is a debug APK. Back up any worlds you need before removing older standalone installations.
+          EOF
           find amethyst-engine -type f \
             \( -iname 'LICENSE' -o -iname 'LICENSE.*' -o -iname 'NOTICE' -o -iname 'NOTICE.*' -o -iname 'COPYING' -o -iname 'COPYING.*' \) \
             -not -path '*/.git/*' -print0 | while IFS= read -r -d '' license_file; do
-              relative_path="${license_file#amethyst-engine/}"
-              destination="engine-output/third-party-licenses/${relative_path}"
-              mkdir -p "$(dirname "$destination")"
-              cp "$license_file" "$destination"
-            done
-          sha256sum engine-output/Yelp-Java-Engine-Amethyst-debug.apk > engine-output/SHA256SUMS
-          ls -lh engine-output/Yelp-Java-Engine-Amethyst-debug.apk
-
-      - name: Upload Java Engine APK and licenses
-        uses: actions/upload-artifact@v4
-        with:
-          name: Yelp-Java-Engine-Amethyst-debug-apk
-          path: engine-output/
-          if-no-files-found: error
-          retention-days: 14
