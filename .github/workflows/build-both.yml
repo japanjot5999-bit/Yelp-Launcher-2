@@ -1,0 +1,151 @@
+name: Build Yelp Launcher and Java Engine APKs
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'Yelp_Launcher/android/**'
+      - 'Yelp_Launcher/web-preview/**'
+      - 'Yelp_Java_Engine_Build_Kit/scripts/**'
+      - 'Yelp_Java_Engine_Build_Kit/docs/**'
+      - '.github/workflows/build-both.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build-yelp-launcher:
+    name: Build Yelp Launcher APK
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Verify launcher JavaScript and Android asset copies
+        working-directory: Yelp_Launcher
+        run: |
+          node --check web-preview/app.js
+          cmp web-preview/index.html android/app/src/main/assets/index.html
+          cmp web-preview/app.js android/app/src/main/assets/app.js
+          cmp web-preview/styles.css android/app/src/main/assets/styles.css
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK packages
+        run: sdkmanager 'platforms;android-36' 'build-tools;36.0.0'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.6.0'
+
+      - name: Build Yelp Launcher debug APK
+        working-directory: Yelp_Launcher/android
+        run: gradle --no-daemon assembleDebug
+
+      - name: Verify and checksum Yelp Launcher APK
+        working-directory: Yelp_Launcher
+        run: |
+          APK="android/app/build/outputs/apk/debug/app-debug.apk"
+          test -s "$APK"
+          mkdir -p build-output
+          cp "$APK" build-output/Yelp-Launcher-debug.apk
+          sha256sum build-output/Yelp-Launcher-debug.apk > build-output/SHA256SUMS
+          ls -lh build-output/Yelp-Launcher-debug.apk
+
+      - name: Upload Yelp Launcher APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Yelp-Launcher-debug-apk
+          path: Yelp_Launcher/build-output/
+          if-no-files-found: error
+          retention-days: 14
+
+  build-java-engine:
+    name: Build Amethyst Java Edition Engine APK
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Check out Amethyst engine and submodules
+        run: |
+          git clone --depth 1 --branch v3_openjdk --recurse-submodules \
+            https://github.com/AngelAuraMC/Amethyst-Android.git amethyst-engine
+          cd amethyst-engine
+          git rev-parse HEAD | tee ../amethyst-source-commit.txt
+          git submodule status --recursive | tee -a ../amethyst-source-commit.txt
+
+      - name: Set up Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install engine SDK and NDK
+        run: sdkmanager 'platforms;android-37' 'build-tools;37.0.0' 'ndk;27.3.13750724'
+
+      - name: Prepare engine runtime folder
+        run: mkdir -p amethyst-engine/app_pojavlauncher/src/main/assets/components/jre
+
+      - name: Download Amethyst Java 8 runtime bundle
+        uses: dawidd6/action-download-artifact@v9
+        with:
+          workflow: build.yml
+          path: amethyst-engine/app_pojavlauncher/src/main/assets/components/jre
+          workflow_conclusion: completed
+          repo: AngelAuraMC/angelauramc-openjdk-build
+          branch: buildjre8
+          name: jre8-pojav
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.6.1'
+          validate-wrappers: false
+
+      - name: Build Amethyst engine APK
+        working-directory: amethyst-engine
+        run: |
+          chmod +x gradlew scripts/languagelist_updater.sh
+          ./scripts/languagelist_updater.sh
+          ./gradlew --no-daemon :jre_lwjgl3glfw:build
+          ./gradlew --no-daemon :app_pojavlauncher:assembleDebug
+
+      - name: Verify engine APK and package provenance
+        run: |
+          APK="amethyst-engine/app_pojavlauncher/build/outputs/apk/debug/app_pojavlauncher-debug.apk"
+          test -s "$APK"
+          mkdir -p engine-output/third-party-licenses
+          cp "$APK" engine-output/Yelp-Java-Engine-Amethyst-debug.apk
+          cp amethyst-source-commit.txt engine-output/
+          cp amethyst-engine/LICENSE engine-output/AMETHYST-LICENSE
+          cp amethyst-engine/README.md engine-output/AMETHYST-UPSTREAM-README.md
+          find amethyst-engine -type f \
+            \( -iname 'LICENSE' -o -iname 'LICENSE.*' -o -iname 'NOTICE' -o -iname 'NOTICE.*' -o -iname 'COPYING' -o -iname 'COPYING.*' \) \
+            -not -path '*/.git/*' -print0 | while IFS= read -r -d '' license_file; do
+              relative_path="${license_file#amethyst-engine/}"
+              destination="engine-output/third-party-licenses/${relative_path}"
+              mkdir -p "$(dirname "$destination")"
+              cp "$license_file" "$destination"
+            done
+          sha256sum engine-output/Yelp-Java-Engine-Amethyst-debug.apk > engine-output/SHA256SUMS
+          ls -lh engine-output/Yelp-Java-Engine-Amethyst-debug.apk
+
+      - name: Upload Java Engine APK and licenses
+        uses: actions/upload-artifact@v4
+        with:
+          name: Yelp-Java-Engine-Amethyst-debug-apk
+          path: engine-output/
+          if-no-files-found: error
+          retention-days: 14
